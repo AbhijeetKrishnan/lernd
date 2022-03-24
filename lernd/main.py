@@ -88,7 +88,7 @@ def extract_definitions(
                 item['confidence'] = pred_probs[index][0].numpy().astype(float)
                 item['definition'] = [str(clauses_1[index])]
         output.append(item)
-    return json.dumps(output, indent=4)
+    return json.dumps(str(output), indent=4)
 
 
 def get_valuations(ground_atom_probs: typing.OrderedDict[GroundAtom, float], threshold: float = 0.01) -> str:
