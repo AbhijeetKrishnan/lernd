@@ -4,12 +4,16 @@ __author__ = "Ingvaras Merkys"
 
 import argparse
 import os
+import pathlib
+
 import tensorflow as tf
 
-from lernd.classes import GroundAtoms, ILP, LanguageModel, MaybeGroundAtom, ProgramTemplate
-from lernd.main import main_loop
+from lernd.classes import (ILP, GroundAtoms, LanguageModel, MaybeGroundAtom,
+                           ProgramTemplate)
 from lernd.lernd_types import Constant, RuleTemplate
+from lernd.main import main_loop
 from lernd.util import ground_atom2str, str2ground_atom, str2pred
+from lernd.parser import parse_file, to_pred_str, get_pred_str_list, get_all_unique_args, to_pred
 
 
 def print_BPN(ilp_problem: ILP):
@@ -81,23 +85,69 @@ def setup_predecessor():
     ilp_problem = ILP('predecessor', language_model, background_axioms, positive_examples, negative_examples)
     return ilp_problem, program_template
 
+def setup_custom(example_path: pathlib.Path):
+    problem_name = example_path.name
+    bk_file = example_path / 'bk.pl'
+    positive_exs_file = example_path / 'pos.pl'
+    negative_exs_file = example_path / 'neg.pl'
+
+    bk = parse_file(bk_file)
+    positive_exs = parse_file(positive_exs_file)
+    negative_exs = parse_file(negative_exs_file)
+
+    # print(bk.dump())
+    # print(positive_exs.dump())
+    # print(negative_exs.dump())
+
+    # Language Model
+    target_pred = str2pred(to_pred_str(positive_exs[0]))
+    preds_ext = list(map(str2pred, get_pred_str_list(bk)))
+    constants = [Constant(i) for i in list(set(get_all_unique_args(bk) + get_all_unique_args(positive_exs) + get_all_unique_args(negative_exs)))]
+    language_model = LanguageModel(target_pred, preds_ext, constants)
+
+    # Program template
+    # TODO: read this from a file (bias.pl or something)
+    aux_pred = str2pred('pred/2')
+    aux_preds = [aux_pred]
+    rules = {
+        target_pred: (RuleTemplate(0, False), RuleTemplate(1, True)),
+        aux_pred: (RuleTemplate(1, False), None)
+    }
+    forward_chaining_steps = 6
+    program_template = ProgramTemplate(aux_preds, rules, forward_chaining_steps)
+
+    # ILP problem
+    # print([to_pred(predicate) for predicate in bk])
+    background_axioms = [str2ground_atom(to_pred(predicate)) for predicate in bk]
+    positive_examples = [str2ground_atom(to_pred(predicate)) for predicate in positive_exs]
+    negative_examples = [str2ground_atom(to_pred(predicate)) for predicate in negative_exs]
+
+    ilp_problem = ILP(problem_name, language_model, background_axioms, positive_examples, negative_examples)
+    return ilp_problem, program_template
 
 if __name__ == '__main__':
     # Disable Tensorflow logs
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('problem', type=str, choices=['predecessor', 'even'], help='Problem to solve')
+    parser.add_argument('--path', type=pathlib.Path, help='Location of problem to solve')
+    parser.add_argument('--steps', type=int, help='Number of steps to run training for')
+    parser.add_argument('--minibatch', type=float, help='Fraction of random examples to base loss on')
+    parser.add_argument('--custom', type=str, choices=['even', 'predecessor'], help='In-built problems to run (even, predecessor)')
     args = parser.parse_args()
 
     with tf.device('/CPU:0'):
-        if args.problem == 'predecessor':
+        if args.custom == 'predecessor':
             ilp_problem, program_template = setup_predecessor()
             steps = 100
             mini_batch = 1.0  # no mini batching
-        elif args.problem == 'even':
+        elif args.custom == 'even':
             ilp_problem, program_template = setup_even()
             steps = 300
             mini_batch = 0.3  # loss is based on 30% of random given examples
+        else:
+            ilp_problem, program_template = setup_custom(args.path)
+            steps = args.steps
+            mini_batch = args.minibatch
         print_BPN(ilp_problem)
         main_loop(ilp_problem, program_template, steps=steps, mini_batch=mini_batch, plot_loss=True)
